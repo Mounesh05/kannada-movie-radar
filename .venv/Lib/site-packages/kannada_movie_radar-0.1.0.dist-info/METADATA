@@ -4,6 +4,8 @@ Version: 0.1.0
 Summary: Agentic AI-powered Kannada cinema intelligence platform
 Requires-Python: <3.13,>=3.12
 License-File: LICENSE
+Requires-Dist: httpx<1,>=0.27
+Requires-Dist: feedparser<7,>=6.0
 Provides-Extra: dev
 Requires-Dist: pytest<10,>=8; extra == "dev"
 Dynamic: license-file

@@ -9,3 +9,5 @@ src/kannada_movie_radar.egg-info/top_level.txt
 src/radar/__init__.py
 src/radar/main.py
 src/radar/collectors/__init__.py
+src/radar/collectors/rss_collector.py
+tests/test_rss_collector.py
