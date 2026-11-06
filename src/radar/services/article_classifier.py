@@ -1,6 +1,9 @@
 
+import re
 from dataclasses import dataclass
 from typing import Literal
+
+from radar.services.text_cleaner import clean_text
 
 Status = Literal[
     "relevant",
@@ -45,24 +48,37 @@ class Classification:
     reason: str
 
 
-def classify_article(title: str) -> Classification:
-    """Classify a title using explicit language indicators."""
+def contains_term(text: str, term: str) -> bool:
+    """Find a complete term rather than an English substring."""
+    pattern = rf"(?<!\w){re.escape(term)}(?!\w)"
+    return re.search(pattern, text) is not None
 
-    normalized = " ".join(title.casefold().split())
+
+def classify_article(title: str) -> Classification:
+    """Conservatively classify a movie-news title."""
+
+    normalized = clean_text(title).casefold()
+
+    if not normalized:
+        return Classification(
+            "needs_review",
+            "Empty article title",
+        )
 
     kannada = [
         term for term in KANNADA_TERMS
-        if term in normalized
+        if contains_term(normalized, term)
     ]
+
     other = [
         term for term in OTHER_LANGUAGE_TERMS
-        if term in normalized
+        if contains_term(normalized, term)
     ]
 
     if kannada and other:
         return Classification(
             "needs_review",
-            "Conflicting film-language indicators",
+            "Multiple film-language indicators detected",
         )
 
     if kannada:

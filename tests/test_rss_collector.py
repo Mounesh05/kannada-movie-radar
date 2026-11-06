@@ -3,7 +3,6 @@ from unittest.mock import Mock, patch
 
 from radar.collectors.rss_collector import collect_rss
 
-
 SAMPLE_RSS = """
 <rss version="2.0">
   <channel>
