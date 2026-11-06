@@ -1,0 +1,11 @@
+LICENSE
+README.md
+pyproject.toml
+src/kannada_movie_radar.egg-info/PKG-INFO
+src/kannada_movie_radar.egg-info/SOURCES.txt
+src/kannada_movie_radar.egg-info/dependency_links.txt
+src/kannada_movie_radar.egg-info/requires.txt
+src/kannada_movie_radar.egg-info/top_level.txt
+src/radar/__init__.py
+src/radar/main.py
+src/radar/collectors/__init__.py
