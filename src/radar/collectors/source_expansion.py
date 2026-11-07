@@ -58,10 +58,8 @@ def collect_sources(
             print(f"URL: {article['url']}")
             print(f"Published: {article['published_at']}")
             print(f"Classification: {classification.status}")   
-
             if not save:
                 continue
-
             inserted = save_article(
                 source_name=article["source"],
                 feed_url=feed_url,
