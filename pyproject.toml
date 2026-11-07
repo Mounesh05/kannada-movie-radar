@@ -29,6 +29,7 @@ dependencies = [
     "python-dotenv>=1.0,<2.0",
     "google-genai>=1,<2",
     "pydantic>=2,<3",
+    "langgraph>=1,<2",
 ]
 
 [project.optional-dependencies]
