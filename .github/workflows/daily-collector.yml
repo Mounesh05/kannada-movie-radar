@@ -117,7 +117,10 @@ jobs:
                       FROM articles
                       WHERE collected_at >= NOW() - INTERVAL '24 hours'
                   """)
-                  print("Articles collected in last 24h:", cur.fetchone()[0])
+                  print(
+                      "Articles collected in last 24h:",
+                      cur.fetchone()[0],
+                  )
 
                   cur.execute("""
                       SELECT review_status, COUNT(*)
@@ -126,6 +129,7 @@ jobs:
                       ORDER BY review_status
                   """)
                   print("News review queue:")
+
                   for status, count in cur.fetchall():
                       print(status, count)
 
@@ -134,7 +138,20 @@ jobs:
                       FROM movie_candidates
                       WHERE verification_status = 'unverified'
                   """)
-                  print("Unverified movie candidates:", cur.fetchone()[0])
+                  print(
+                      "Unverified movie candidates:",
+                      cur.fetchone()[0],
+                  )
 
           print("PASS: Cloud processing status checked")
           PY
+
+      # PHASE 4.9C — TELEGRAM FAILURE ALERT
+      - name: Notify Telegram on failure
+        if: ${{ failure() }}
+        continue-on-error: true
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          python -m radar.telegram.failure_alert --send

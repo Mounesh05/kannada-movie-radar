@@ -11,7 +11,7 @@ on:
         default: false
 
   schedule:
-    # Sunday 09:00 IST = Sunday 03:30 UTC
+    # Sunday 09:00 IST
     - cron: "30 3 * * 0"
 
 permissions:
@@ -28,6 +28,7 @@ jobs:
         github.event_name == 'workflow_dispatch' ||
         vars.DIGEST_ENABLED == 'true'
       }}
+
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -63,3 +64,13 @@ jobs:
           else
             python -m radar.telegram.sunday_digest
           fi
+
+      # PHASE 4.9C — TELEGRAM FAILURE ALERT
+      - name: Notify Telegram on failure
+        if: ${{ failure() }}
+        continue-on-error: true
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          python -m radar.telegram.failure_alert --send
