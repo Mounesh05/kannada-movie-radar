@@ -13,11 +13,10 @@ MAX_MESSAGE_LENGTH = 3900
 
 
 def last_completed_week(now=None):
-    """Return previous completed Sunday-Saturday window in IST."""
+    """Return the last completed Sunday-Saturday week in IST."""
     now = now or datetime.now(timezone.utc)
     local = now.astimezone(IST)
 
-    # Python: Monday=0, Sunday=6
     days_since_sunday = (local.weekday() + 1) % 7
     this_sunday = local.date() - timedelta(
         days=days_since_sunday
@@ -30,7 +29,7 @@ def last_completed_week(now=None):
 
 
 def get_approved_news(start, end):
-    """Retrieve reviewed news published within the IST week."""
+    """Get only approved, verified Kannada film news."""
     with get_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -64,7 +63,7 @@ def get_approved_news(start, end):
 
 
 def format_digest(start, end, articles):
-    """Build a bounded plain-text Telegram message."""
+    """Build a Telegram-safe plain-text weekly digest."""
     last_day = (end - timedelta(days=1)).date()
 
     lines = [
@@ -108,32 +107,53 @@ def format_digest(start, end, articles):
     message = "\n".join(lines)
 
     if len(message) > MAX_MESSAGE_LENGTH:
-        raise ValueError("Digest exceeds message length limit")
+        raise ValueError("Digest exceeds Telegram length limit")
 
     return message
 
 
 def send_digest(start, end, message):
-    """Send once per chat and week, with a durable delivery claim."""
-    token = os.environ.get("TELEGRAM_BOT_TOKEN")
-    chat_id = os.environ.get("TELEGRAM_CHAT_ID")
+    """Send a digest and track delivery in Neon PostgreSQL."""
 
-    if not token or not chat_id:
-        raise RuntimeError("Telegram secrets are missing")
+    # Remove accidental whitespace/newlines from GitHub secrets.
+    token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+    chat_id = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
+
+    if not token:
+        raise RuntimeError("TELEGRAM_BOT_TOKEN is missing")
+
+    if not chat_id:
+        raise RuntimeError("TELEGRAM_CHAT_ID is missing")
+
+    # Reject malformed secret values before claiming the delivery.
+    if any(char.isspace() for char in token):
+        raise ValueError(
+            "TELEGRAM_BOT_TOKEN contains internal whitespace"
+        )
+
+    if not chat_id.lstrip("-").isdigit():
+        raise ValueError("TELEGRAM_CHAT_ID must be numeric")
 
     with get_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
                 INSERT INTO telegram_digest_deliveries (
-                    chat_id, week_start_ist, week_end_ist, status
+                    chat_id,
+                    week_start_ist,
+                    week_end_ist,
+                    status
                 )
                 VALUES (%s, %s, %s, 'sending')
                 ON CONFLICT (chat_id, week_start_ist)
                 DO NOTHING
                 RETURNING id
                 """,
-                (chat_id, start.date(), end.date()),
+                (
+                    chat_id,
+                    start.date(),
+                    end.date(),
+                ),
             )
             row = cur.fetchone()
 
@@ -146,8 +166,8 @@ def send_digest(start, end, message):
 
     delivery_id = row[0]
 
-    # Deliberately no automatic retry: an ambiguous timeout
-    # must not cause duplicate Telegram messages.
+    # No automatic retry after an ambiguous network failure.
+    # Telegram might have accepted the message already.
     response = httpx.post(
         f"https://api.telegram.org/bot{token}/sendMessage",
         json={
@@ -157,12 +177,14 @@ def send_digest(start, end, message):
         },
         timeout=30,
     )
-    response.raise_for_status()
 
+    response.raise_for_status()
     data = response.json()
 
     if not data.get("ok"):
-        raise RuntimeError("Telegram rejected the message")
+        raise RuntimeError(
+            "Telegram rejected the digest message"
+        )
 
     message_id = data["result"]["message_id"]
 
@@ -174,7 +196,8 @@ def send_digest(start, end, message):
                 SET status = 'sent',
                     sent_at = CURRENT_TIMESTAMP,
                     telegram_message_id = %s
-                WHERE id = %s AND status = 'sending'
+                WHERE id = %s
+                  AND status = 'sending'
                 """,
                 (message_id, delivery_id),
             )
@@ -183,12 +206,16 @@ def send_digest(start, end, message):
 
 
 def main():
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(
+        description="Kannada Movie Radar Sunday Telegram Digest"
+    )
+
     parser.add_argument(
         "--send",
         action="store_true",
-        help="Send to Telegram; default is preview only",
+        help="Send the digest to Telegram",
     )
+
     args = parser.parse_args()
 
     start, end = last_completed_week()
@@ -197,6 +224,7 @@ def main():
 
     print("Eligible verified events:", len(articles))
     print("Week:", start.date(), "to", end.date())
+
     print("\nDIGEST PREVIEW\n")
     print(message)
 
