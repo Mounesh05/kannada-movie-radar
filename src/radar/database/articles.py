@@ -87,9 +87,48 @@ def save_article(
                 ),
             )
 
+           
             inserted_article = cursor.fetchone()
 
-            return inserted_article is not None
+            if inserted_article is None:
+                # URL already exists; do not generate a duplicate event.
+                return False
+
+            article_id = inserted_article[0]
+
+            # Store the raw-article event in the same transaction.
+            # The consumer will perform deeper relevance checks.
+            cursor.execute(
+                """
+                INSERT INTO event_outbox (
+                    event_type,
+                    aggregate_id,
+                    topic,
+                    payload,
+                    status,
+                    attempts
+                )
+                VALUES (
+                    'article.collected.v1',
+                    %s,
+                    'radar.articles.collected.v1',
+                    jsonb_build_object(
+                        'schema_version', 1,
+                        'article_id', %s
+                    ),
+                    'pending',
+                    0
+                )
+                ON CONFLICT (event_type, aggregate_id)
+                DO NOTHING
+                """,
+                (article_id, article_id),
+            )
+
+            return True
+ 
+
+           
 
 
 def get_recent_articles(
