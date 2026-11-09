@@ -1,5 +1,6 @@
 
 import os
+import unicodedata
 from typing import TypedDict
 
 from langgraph.graph import END, START, StateGraph
@@ -102,13 +103,21 @@ def route_extraction(state: MovieState) -> str:
         return "log"
     return "review"
 
+def normalize_evidence(text: str) -> str:
+    """Normalize punctuation and spacing for evidence comparison."""
+    value = unicodedata.normalize("NFKC", clean_text(text)).casefold()
+
+    return "".join(
+        char
+        for char in value
+        if unicodedata.category(char)[0] in {"L", "N", "M"}
+    )
 
 def evidence_review_node(state: MovieState) -> dict:
     """Apply basic evidence checks, not factual verification."""
 
     extraction = state["extraction"]
-    source_title = clean_text(state["title"]).casefold()
-
+    source_title = normalize_evidence(state["title"])
     if (
         not extraction.movie_title
         or not extraction.movie_title.strip()
@@ -131,7 +140,7 @@ def evidence_review_node(state: MovieState) -> dict:
         }
 
     for item in extraction.evidence:
-        normalized = clean_text(item).casefold()
+        normalized = normalize_evidence(item)
 
         if not normalized or normalized not in source_title:
             return {
