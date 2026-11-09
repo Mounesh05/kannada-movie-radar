@@ -1,0 +1,47 @@
+
+name: Kannada Movie Radar CI
+
+on:
+  push:
+    branches:
+      - main
+
+  pull_request:
+    branches:
+      - main
+
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Python Tests and Ruff
+    runs-on: ubuntu-latest
+
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
+      - name: Run Ruff
+        run: python -m ruff check src tests
+
+      - name: Run pytest
+        env:
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+          LANGSMITH_TRACING: "false"
+        run: python -m pytest -q
