@@ -11,7 +11,7 @@ on:
         default: false
 
   schedule:
-    # Every day, 08:00 IST
+    # Every day at 08:00 AM IST
     - cron: "30 2 * * *"
 
 permissions:
@@ -49,10 +49,10 @@ jobs:
         }}
 
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Python
+      - name: Set up Python 3.12
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -74,18 +74,24 @@ jobs:
         shell: bash
         run: |
           if [[ "$WRITE_TO_NEON" == "true" ]]; then
+            echo "Collecting articles into Neon"
+
             python -m radar.collectors.pipeline \
               --feed "$RSS_FEED"
           else
+            echo "Preview mode: no database writes"
+
             python -m radar.collectors.pipeline \
-              --feed "$RSS_FEED" --dry-run
+              --feed "$RSS_FEED" \
+              --dry-run
           fi
 
       - name: Categorize fresh news
         if: env.WRITE_TO_NEON == 'true'
         run: |
           python -m radar.collectors.triage_news \
-            --limit 100 --save
+            --limit 100 \
+            --save
 
       - name: Extract movie candidates
         if: >-
@@ -101,7 +107,8 @@ jobs:
           }
 
           python -m radar.collectors.process_movie_candidates \
-            --limit 8 --execute
+            --limit 8 \
+            --execute
 
       - name: Report processing status
         if: env.WRITE_TO_NEON == 'true'
@@ -115,8 +122,10 @@ jobs:
                   cur.execute("""
                       SELECT COUNT(*)
                       FROM articles
-                      WHERE collected_at >= NOW() - INTERVAL '24 hours'
+                      WHERE collected_at >=
+                          CURRENT_TIMESTAMP - INTERVAL '24 hours'
                   """)
+
                   print(
                       "Articles collected in last 24h:",
                       cur.fetchone()[0],
@@ -128,6 +137,7 @@ jobs:
                       GROUP BY review_status
                       ORDER BY review_status
                   """)
+
                   print("News review queue:")
 
                   for status, count in cur.fetchall():
@@ -138,6 +148,7 @@ jobs:
                       FROM movie_candidates
                       WHERE verification_status = 'unverified'
                   """)
+
                   print(
                       "Unverified movie candidates:",
                       cur.fetchone()[0],
@@ -145,6 +156,12 @@ jobs:
 
           print("PASS: Cloud processing status checked")
           PY
+
+      # PHASE 4.9E — COLLECTION HEARTBEAT
+      - name: Record successful collection heartbeat
+        if: env.WRITE_TO_NEON == 'true'
+        run: |
+          python -m radar.telegram.reliability record
 
       # PHASE 4.9C — TELEGRAM FAILURE ALERT
       - name: Notify Telegram on failure
