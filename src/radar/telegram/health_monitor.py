@@ -1,9 +1,8 @@
 
-"""Read-only health monitoring for Kannada Movie Radar."""
+"""Database health monitoring for Kannada Movie Radar."""
 
 import argparse
 import os
-from datetime import datetime, timezone
 
 from radar.database.connection import get_connection
 from radar.telegram.failure_alert import send_alert
@@ -11,16 +10,15 @@ from radar.telegram.sunday_digest import last_completed_week
 
 
 def check_health() -> tuple[list[str], list[str]]:
-    """Return informational metrics and actionable alerts."""
-    metrics = []
-    alerts = []
+    """Check database health without modifying any records."""
+
+    metrics: list[str] = []
+    alerts: list[str] = []
 
     with get_connection() as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT CURRENT_TIMESTAMP")
-            now = cur.fetchone()[0]
 
-            # Pending news awaiting human approval.
+            # 1. Count pending news reviews.
             cur.execute(
                 """
                 SELECT COUNT(*)
@@ -29,22 +27,12 @@ def check_health() -> tuple[list[str], list[str]]:
                 """
             )
             pending = cur.fetchone()[0]
-            metrics.append(f"Pending news reviews: {pending}")
 
-            # Old reviews deserve attention, not auto-approval.
-            cur.execute(
-                """
-                SELECT COUNT(*)
-                FROM news_events
-                WHERE review_status = 'pending'
-                  AND first_seen_at < %s
-                """,
-                (now.replace(tzinfo=timezone.utc)
-                 if now.tzinfo is None else now,),
+            metrics.append(
+                f"Pending news reviews: {pending}"
             )
-            # The query above only checks pending status and
-            # existing timestamps. Age is checked below instead.
-            # Re-query using database interval arithmetic.
+
+            # 2. Find reviews pending for more than 48 hours.
             cur.execute(
                 """
                 SELECT COUNT(*)
@@ -56,13 +44,17 @@ def check_health() -> tuple[list[str], list[str]]:
             )
             old_pending = cur.fetchone()[0]
 
-            if old_pending:
+            metrics.append(
+                f"Reviews older than 48 hours: {old_pending}"
+            )
+
+            if old_pending > 0:
                 alerts.append(
-                    f"{old_pending} news events pending "
-                    "review for over 48 hours"
+                    f"{old_pending} news events have been "
+                    "pending review for over 48 hours."
                 )
 
-            # Unverified movie candidates.
+            # 3. Count unverified movie candidates.
             cur.execute(
                 """
                 SELECT COUNT(*)
@@ -71,12 +63,15 @@ def check_health() -> tuple[list[str], list[str]]:
                 """
             )
             unverified = cur.fetchone()[0]
+
             metrics.append(
                 f"Unverified movie candidates: {unverified}"
             )
 
-            # Failed extraction attempts are informational;
-            # historical failures alone should not break a run.
+            # These need evidence review.
+            # Never automatically mark them verified.
+
+            # 4. Count failed movie extraction attempts.
             cur.execute(
                 """
                 SELECT COUNT(*)
@@ -85,11 +80,15 @@ def check_health() -> tuple[list[str], list[str]]:
                 """
             )
             failed = cur.fetchone()[0]
+
             metrics.append(
-                f"Recorded failed extraction attempts: {failed}"
+                f"Recorded failed extractions: {failed}"
             )
 
-            # Detect old Telegram delivery claims.
+            # Historical extraction failures alone
+            # do not trigger repeated alerts.
+
+            # 5. Detect stuck Telegram deliveries.
             cur.execute(
                 """
                 SELECT COUNT(*)
@@ -100,31 +99,40 @@ def check_health() -> tuple[list[str], list[str]]:
                 """
             )
             stuck = cur.fetchone()[0]
-            metrics.append(f"Stuck Telegram deliveries: {stuck}")
 
-            if stuck:
+            metrics.append(
+                f"Stuck Telegram deliveries: {stuck}"
+            )
+
+            if stuck > 0:
                 alerts.append(
-                    f"{stuck} Telegram digest deliveries "
-                    "stuck in 'sending' for over 1 hour"
+                    f"{stuck} Telegram deliveries have "
+                    "been stuck in 'sending' for over 1 hour."
                 )
 
-            # Confirm last completed week's digest was sent.
-            # Only alert if there was at least one eligible
-            # verified event and Sunday delivery was enabled.
-            if os.getenv("DIGEST_ENABLED", "").lower() == "true":
-                start, end = last_completed_week(
-                    datetime.now(timezone.utc)
-                )
+            # 6. Check previous week's Sunday digest.
+            digest_enabled = (
+                os.getenv("DIGEST_ENABLED", "")
+                .strip()
+                .lower()
+                == "true"
+            )
+
+            if digest_enabled:
+                start, end = last_completed_week()
 
                 cur.execute(
                     """
                     SELECT COUNT(*)
                     FROM news_events AS n
+
                     JOIN articles AS a
                       ON a.id = n.article_id
+
                     JOIN movie_candidates AS mc
                       ON mc.id = n.movie_candidate_id
                      AND mc.article_id = a.id
+
                     WHERE n.review_status = 'approved'
                       AND n.evidence_label = 'verified'
                       AND n.duplicate_of_event_id IS NULL
@@ -137,17 +145,25 @@ def check_health() -> tuple[list[str], list[str]]:
                     """,
                     (start, end),
                 )
+
                 eligible = cur.fetchone()[0]
+
                 metrics.append(
-                    f"Last completed week eligible events: {eligible}"
+                    "Eligible events in last completed "
+                    f"week: {eligible}"
                 )
 
-                if eligible:
+                # Empty weeks are intentionally not sent.
+                if eligible > 0:
                     chat_id = os.getenv(
                         "TELEGRAM_CHAT_ID", ""
                     ).strip()
 
-                    if chat_id:
+                    if not chat_id:
+                        alerts.append(
+                            "TELEGRAM_CHAT_ID is missing."
+                        )
+                    else:
                         cur.execute(
                             """
                             SELECT COUNT(*)
@@ -158,55 +174,90 @@ def check_health() -> tuple[list[str], list[str]]:
                             """,
                             (chat_id, start.date()),
                         )
+
                         sent = cur.fetchone()[0]
 
-                        if not sent:
+                        if sent == 0:
                             alerts.append(
-                                "No confirmed Telegram delivery "
-                                f"for week starting {start.date()}"
+                                "No confirmed Telegram digest "
+                                "delivery for the week starting "
+                                f"{start.date()}."
                             )
+
+            else:
+                metrics.append(
+                    "Sunday digest monitoring disabled."
+                )
 
     return metrics, alerts
 
 
+def build_health_alert(alerts: list[str]) -> str:
+    """Format health issues for Telegram."""
+
+    lines = [
+        "⚠️ Kannada Movie Radar — Health Alert",
+        "",
+    ]
+
+    for item in alerts:
+        lines.append(f"• {item}")
+
+    lines.extend(
+        [
+            "",
+            "Check Neon PostgreSQL and GitHub Actions.",
+        ]
+    )
+
+    return "\n".join(lines)
+
+
 def main() -> None:
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(
+        description="Kannada Movie Radar Health Monitor"
+    )
+
     parser.add_argument(
         "--send",
         action="store_true",
-        help="Send Telegram only when problems are detected",
+        help="Send health alerts through Telegram",
     )
+
     args = parser.parse_args()
 
     metrics, alerts = check_health()
 
-    print("KANNADA MOVIE RADAR HEALTH REPORT")
+    print("=" * 50)
+    print("KANNADA MOVIE RADAR")
+    print("DATABASE HEALTH REPORT")
+    print("=" * 50)
+
     for metric in metrics:
         print(metric)
 
+    print("-" * 50)
+
     if not alerts:
-        print("PASS: No actionable health alerts")
+        print("PASS: No actionable health alerts.")
         return
 
-    print("\nATTENTION REQUIRED")
+    print("ATTENTION REQUIRED")
+
     for item in alerts:
         print(f"- {item}")
 
     if not args.send:
-        print("\nPreview mode: no Telegram alert sent")
+        print(
+            "\nPreview mode: "
+            "No Telegram alerts sent."
+        )
         return
 
-    message = "\n".join(
-        [
-            "⚠️ Kannada Movie Radar — Health Alert",
-            "",
-            *[f"• {item}" for item in alerts],
-            "",
-            "Check Neon and GitHub Actions.",
-        ]
-    )
-
+    message = build_health_alert(alerts)
     send_alert(message)
+
+    print("PASS: Health alert sent to Telegram.")
 
 
 if __name__ == "__main__":
