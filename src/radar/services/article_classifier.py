@@ -5,20 +5,25 @@ from typing import Literal
 
 from radar.services.text_cleaner import clean_text
 
-Status = Literal[
-    "relevant",
-    "needs_review",
-    "not_relevant",
-]
+Status = Literal["relevant", "needs_review", "not_relevant"]
+
+
+@dataclass(frozen=True)
+class Classification:
+    status: Status
+    reason: str
+
 
 KANNADA_TERMS = (
     "ಕನ್ನಡ ಸಿನಿಮಾ",
     "ಕನ್ನಡ ಚಿತ್ರ",
     "ಕನ್ನಡ ಚಲನಚಿತ್ರ",
+    "ಕನ್ನಡ ಸಿನೆಮಾ",
     "ಸ್ಯಾಂಡಲ್‌ವುಡ್",
     "ಸ್ಯಾಂಡಲ್ ವುಡ್",
     "kannada film",
     "kannada movie",
+    "kannada cinema",
     "sandalwood",
 )
 
@@ -41,59 +46,151 @@ OTHER_LANGUAGE_TERMS = (
     "hindi movie",
 )
 
+# Only explicit film-related developments.
+FILM_UPDATE_TERMS = (
+    "release date",
+    "releasing on",
+    "theatrical release",
+    "movie release",
+    "film release",
+    "trailer",
+    "teaser",
+    "first look",
+    "motion poster",
+    "official poster",
+    "ott",
+    "streaming",
+    "digital premiere",
+    "shooting begins",
+    "filming begins",
+    "shooting completed",
+    "film announced",
+    "movie announced",
+    "film announcement",
+    "movie announcement",
+    "new movie",
+    "new film",
+    "joins cast",
+    "cast announced",
+    "box office",
+    "postponed",
+    "ಬಿಡುಗಡೆ",
+    "ಬಿಡುಗಡೆ ದಿನಾಂಕ",
+    "ಟ್ರೇಲರ್",
+    "ಟೀಸರ್",
+    "ಚಿತ್ರೀಕರಣ",
+    "ಹೊಸ ಚಿತ್ರ",
+    "ಘೋಷಣೆ",
+    "ಒಟಿಟಿ",
+    "ಫಸ್ಟ್ ಲುಕ್",
+)
 
-@dataclass(frozen=True)
-class Classification:
-    status: Status
-    reason: str
+# Explicitly off-topic personal/celebrity headlines.
+PERSONAL_NEWS_TERMS = (
+    "birthday",
+    "wedding",
+    "marriage",
+    "divorce",
+    "dating",
+    "relationship",
+    "girlfriend",
+    "boyfriend",
+    "personal life",
+    "family vacation",
+    "celebrates birthday",
+    "ಹುಟ್ಟುಹಬ್ಬ",
+    "ಮದುವೆ",
+    "ವಿಚ್ಛೇದನ",
+    "ಪ್ರೇಮ ಸಂಬಂಧ",
+)
+
+# These are contextual signals, not automatic proof.
+GENERAL_CINEMA_TERMS = (
+    "cinema",
+    "movie",
+    "film",
+    "festival",
+    "actor",
+    "actress",
+    "director",
+    "ಸಿನಿಮಾ",
+    "ಸಿನೆಮಾ",
+    "ಚಿತ್ರ",
+    "ನಟ",
+    "ನಟಿ",
+    "ನಿರ್ದೇಶಕ",
+    "ಬಿಫೆಸ್",
+)
 
 
 def contains_term(text: str, term: str) -> bool:
-    """Find a complete term rather than an English substring."""
+    """Match terms without false English substring matches."""
     pattern = rf"(?<!\w){re.escape(term)}(?!\w)"
     return re.search(pattern, text) is not None
 
 
+def has_any(text: str, terms: tuple[str, ...]) -> bool:
+    return any(contains_term(text, term) for term in terms)
+
+
 def classify_article(title: str) -> Classification:
-    """Conservatively classify a movie-news title."""
+    """Conservative title-only Kannada film relevance gate.
 
-    normalized = clean_text(title).casefold()
+    'relevant' means potentially eligible for deeper processing,
+    not factually verified or Telegram-publishable.
+    """
 
-    if not normalized:
+    text = clean_text(title).casefold()
+
+    if not text:
         return Classification(
             "needs_review",
-            "Empty article title",
+            "Empty title",
         )
 
-    kannada = [
-        term for term in KANNADA_TERMS
-        if contains_term(normalized, term)
-    ]
+    kannada = has_any(text, KANNADA_TERMS)
+    other_language = has_any(text, OTHER_LANGUAGE_TERMS)
+    film_update = has_any(text, FILM_UPDATE_TERMS)
+    personal_news = has_any(text, PERSONAL_NEWS_TERMS)
+    cinema_context = has_any(text, GENERAL_CINEMA_TERMS)
 
-    other = [
-        term for term in OTHER_LANGUAGE_TERMS
-        if contains_term(normalized, term)
-    ]
+    if personal_news:
+        return Classification(
+            "not_relevant",
+            "Celebrity personal-life content is excluded",
+        )
 
-    if kannada and other:
+    if kannada and other_language:
         return Classification(
             "needs_review",
-            "Multiple film-language indicators detected",
+            "Mixed-language cinema context",
+        )
+
+    if other_language and not kannada:
+        return Classification(
+            "not_relevant",
+            "Other-language film without Kannada evidence",
+        )
+
+    if kannada and film_update:
+        return Classification(
+            "relevant",
+            "Explicit Kannada cinema update indicator",
         )
 
     if kannada:
         return Classification(
-            "relevant",
-            f"Kannada cinema indicator: {kannada[0]}",
+            "needs_review",
+            "Kannada cinema context, but no clear film update",
         )
 
-    if other:
+    if film_update or cinema_context:
         return Classification(
-            "not_relevant",
-            f"Other-language indicator: {other[0]}",
+            "needs_review",
+            "Film-related headline; Kannada identity unconfirmed",
         )
 
     return Classification(
         "needs_review",
-        "Insufficient evidence in article title",
+        "Insufficient context to establish film relevance",
     )
