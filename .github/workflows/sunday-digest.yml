@@ -1,4 +1,4 @@
-
+﻿
 name: Kannada Movie Radar Sunday Digest
 
 on:
@@ -60,12 +60,12 @@ jobs:
 
           if [[ "$EVENT_NAME" == "schedule" ||
                 "$SEND_NOW" == "true" ]]; then
-            python -m radar.telegram.sunday_digest --send
+            python -m radar.telegram.automatic_digest --send
           else
-            python -m radar.telegram.sunday_digest
+            python -m radar.telegram.automatic_digest
           fi
 
-      # PHASE 4.9C — TELEGRAM FAILURE ALERT
+      # PHASE 4.9C â€” TELEGRAM FAILURE ALERT
       - name: Notify Telegram on failure
         if: ${{ failure() }}
         continue-on-error: true
@@ -74,3 +74,4 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
           python -m radar.telegram.failure_alert --send
+
