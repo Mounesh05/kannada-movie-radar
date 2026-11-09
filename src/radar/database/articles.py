@@ -87,7 +87,7 @@ def save_article(
                 ),
             )
 
-           
+
             inserted_article = cursor.fetchone()
 
             if inserted_article is None:
@@ -126,9 +126,9 @@ def save_article(
             )
 
             return True
- 
 
-           
+
+
 
 
 def get_recent_articles(
