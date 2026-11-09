@@ -8,6 +8,16 @@ load_dotenv()
 
 
 def get_connection():
+    """Connect to cloud PostgreSQL or local PostgreSQL."""
+
+    database_url = os.getenv("DATABASE_URL")
+
+    if database_url:
+        return psycopg.connect(
+            database_url,
+            connect_timeout=10,
+        )
+
     return psycopg.connect(
         host=os.getenv("DB_HOST", "localhost"),
         port=os.getenv("DB_PORT", "5432"),
