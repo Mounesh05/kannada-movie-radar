@@ -4,18 +4,45 @@ name: Kannada Movie Radar Collector
 on:
   workflow_dispatch:
     inputs:
-      feed_url:
-        description: "RSS feed URL approved for collection"
+      write_to_neon:
+        description: "Save articles and triage results to Neon"
         required: true
-        type: string
+        type: boolean
+        default: false
+
+  schedule:
+    # 08:00 IST = 02:30 UTC
+    - cron: "30 2 * * *"
 
 permissions:
   contents: read
 
+concurrency:
+  group: kannada-movie-radar-collector
+  cancel-in-progress: false
+
 jobs:
   collect:
+    if: >-
+      ${{
+        vars.APPROVED_RSS_FEED != '' &&
+        (
+          github.event_name == 'workflow_dispatch' ||
+          vars.COLLECTION_ENABLED == 'true'
+        )
+      }}
+
     runs-on: ubuntu-latest
     timeout-minutes: 15
+
+    env:
+      RSS_FEED: ${{ vars.APPROVED_RSS_FEED }}
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      WRITE_TO_NEON: >-
+        ${{
+          github.event_name == 'schedule' ||
+          inputs.write_to_neon == true
+        }}
 
     steps:
       - name: Checkout repository
@@ -29,10 +56,31 @@ jobs:
       - name: Install dependencies
         run: python -m pip install -e .
 
-      - name: Run collection preview
-        env:
-          RSS_FEED: ${{ inputs.feed_url }}
+      - name: Check database configuration
+        if: env.WRITE_TO_NEON == 'true'
         run: |
-          python -m radar.collectors.pipeline \
-            --feed "$RSS_FEED" \
-            --dry-run
+          test -n "$DATABASE_URL" || {
+            echo "DATABASE_URL secret is missing"
+            exit 1
+          }
+
+      - name: Collect articles
+        shell: bash
+        run: |
+          if [[ "$WRITE_TO_NEON" == "true" ]]; then
+            echo "Writing collected articles to Neon"
+            python -m radar.collectors.pipeline \
+              --feed "$RSS_FEED"
+          else
+            echo "Preview only: no database writes"
+            python -m radar.collectors.pipeline \
+              --feed "$RSS_FEED" \
+              --dry-run
+          fi
+
+      - name: Categorize saved articles
+        if: env.WRITE_TO_NEON == 'true'
+        run: |
+          python -m radar.collectors.triage_news \
+            --limit 100 \
+            --save
