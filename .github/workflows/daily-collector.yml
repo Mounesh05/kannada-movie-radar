@@ -5,13 +5,13 @@ on:
   workflow_dispatch:
     inputs:
       write_to_neon:
-        description: "Save articles and triage results to Neon"
+        description: "Collect and save articles to Neon"
         required: true
         type: boolean
         default: false
 
   schedule:
-    # 08:00 IST = 02:30 UTC
+    # Every day, 08:00 IST
     - cron: "30 2 * * *"
 
 permissions:
@@ -33,11 +33,15 @@ jobs:
       }}
 
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
 
     env:
       RSS_FEED: ${{ vars.APPROVED_RSS_FEED }}
       DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      GEMINI_MODEL: ${{ vars.GEMINI_MODEL }}
+      EXTRACTION_ENABLED: ${{ vars.EXTRACTION_ENABLED }}
+
       WRITE_TO_NEON: >-
         ${{
           github.event_name == 'schedule' ||
@@ -45,10 +49,10 @@ jobs:
         }}
 
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Python 3.12
+      - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -56,31 +60,81 @@ jobs:
       - name: Install dependencies
         run: python -m pip install -e .
 
-      - name: Check database configuration
-        if: env.WRITE_TO_NEON == 'true'
-        run: |
-          test -n "$DATABASE_URL" || {
-            echo "DATABASE_URL secret is missing"
-            exit 1
-          }
-
-      - name: Collect articles
+      - name: Validate configuration
         shell: bash
         run: |
           if [[ "$WRITE_TO_NEON" == "true" ]]; then
-            echo "Writing collected articles to Neon"
+            test -n "$DATABASE_URL" || {
+              echo "Missing DATABASE_URL"
+              exit 1
+            }
+          fi
+
+      - name: Collect RSS news
+        shell: bash
+        run: |
+          if [[ "$WRITE_TO_NEON" == "true" ]]; then
             python -m radar.collectors.pipeline \
               --feed "$RSS_FEED"
           else
-            echo "Preview only: no database writes"
             python -m radar.collectors.pipeline \
-              --feed "$RSS_FEED" \
-              --dry-run
+              --feed "$RSS_FEED" --dry-run
           fi
 
-      - name: Categorize saved articles
+      - name: Categorize fresh news
         if: env.WRITE_TO_NEON == 'true'
         run: |
           python -m radar.collectors.triage_news \
-            --limit 100 \
-            --save
+            --limit 100 --save
+
+      - name: Extract movie candidates
+        if: >-
+          ${{
+            env.WRITE_TO_NEON == 'true' &&
+            env.EXTRACTION_ENABLED == 'true'
+          }}
+        shell: bash
+        run: |
+          test -n "$GEMINI_API_KEY" || {
+            echo "Missing GEMINI_API_KEY"
+            exit 1
+          }
+
+          python -m radar.collectors.process_movie_candidates \
+            --limit 8 --execute
+
+      - name: Report processing status
+        if: env.WRITE_TO_NEON == 'true'
+        shell: bash
+        run: |
+          python - <<'PY'
+          from radar.database.connection import get_connection
+
+          with get_connection() as conn:
+              with conn.cursor() as cur:
+                  cur.execute("""
+                      SELECT COUNT(*)
+                      FROM articles
+                      WHERE collected_at >= NOW() - INTERVAL '24 hours'
+                  """)
+                  print("Articles collected in last 24h:", cur.fetchone()[0])
+
+                  cur.execute("""
+                      SELECT review_status, COUNT(*)
+                      FROM news_events
+                      GROUP BY review_status
+                      ORDER BY review_status
+                  """)
+                  print("News review queue:")
+                  for status, count in cur.fetchall():
+                      print(status, count)
+
+                  cur.execute("""
+                      SELECT COUNT(*)
+                      FROM movie_candidates
+                      WHERE verification_status = 'unverified'
+                  """)
+                  print("Unverified movie candidates:", cur.fetchone()[0])
+
+          print("PASS: Cloud processing status checked")
+          PY
